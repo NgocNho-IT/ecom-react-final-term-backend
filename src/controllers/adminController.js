@@ -57,7 +57,7 @@ exports.shipOrder = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 3. XÓA (HỦY) ĐƠN HÀNG VÀ HOÀN LẠI TỒN KHO
+// 3. XÓA (HỦY) ĐƠN HÀNG VÀ HOÀN LẠI TỒN KHO (FIXED)
 exports.deleteOrder = async (req, res) => {
     try {
         // Lấy thông tin đơn hàng trước khi xóa để biết cần hoàn lại bao nhiêu
@@ -91,7 +91,7 @@ exports.deleteOrder = async (req, res) => {
             }
         }
 
-        // Xóa đơn sau khi đã hoàn kho
+        // Xóa đơn sau khi đã hoàn kho xong
         await Order.findByIdAndDelete(req.params.id);
         res.status(200).json({ success: true, message: 'Đã hủy đơn và hoàn lại tồn kho thành công!' });
     } catch (error) { 
@@ -99,13 +99,24 @@ exports.deleteOrder = async (req, res) => {
     }
 };
 
-// 4. XÓA SẢN PHẨM (NÊN CHUYỂN TRẠNG THÁI ẨN THAY VÌ XÓA CỨNG)
+// 4. XÓA SẢN PHẨM VÀ XÓA LUÔN ẢNH TRONG FOLDER UPLOADS (FIXED)
 exports.deleteProduct = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
         if (product && product.image) {
-            const imagePath = path.join(__dirname, '..', 'public', product.image);
-            if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+            // Thuật toán dò tìm đường dẫn ảnh thông minh để dọn rác
+            const possiblePaths = [
+                path.join(__dirname, '../../public', product.image),
+                path.join(__dirname, '../public', product.image),
+                path.join(process.cwd(), 'public', product.image)
+            ];
+
+            for (let imgPath of possiblePaths) {
+                if (fs.existsSync(imgPath)) {
+                    fs.unlinkSync(imgPath);
+                    break; 
+                }
+            }
         }
         await Product.findByIdAndDelete(req.params.id);
         res.status(200).json({ success: true, message: 'Đã xóa sản phẩm và ảnh thành công!' });
@@ -113,7 +124,7 @@ exports.deleteProduct = async (req, res) => {
 };
 
 // =========================================================================
-// 5. CẬP NHẬT SẢN PHẨM (PHIÊN BẢN SUPER FULL NÂNG CẤP)
+// 5. CẬP NHẬT SẢN PHẨM (BẢN SUPER FULL NÂNG CẤP)
 // =========================================================================
 exports.updateProduct = async (req, res) => {
     try {
@@ -165,12 +176,23 @@ exports.updateProduct = async (req, res) => {
             }
         }
 
+        // 3. XỬ LÝ ẢNH MỚI VÀ DỌN RÁC ẢNH CŨ (FIXED)
         if (req.file) {
             if (id && id !== "undefined") {
                 const oldProduct = await Product.findById(id);
                 if (oldProduct && oldProduct.image) {
-                    const oldPath = path.join(__dirname, '..', 'public', oldProduct.image);
-                    if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+                    const possiblePaths = [
+                        path.join(__dirname, '../../public', oldProduct.image),
+                        path.join(__dirname, '../public', oldProduct.image),
+                        path.join(process.cwd(), 'public', oldProduct.image)
+                    ];
+
+                    for (let imgPath of possiblePaths) {
+                        if (fs.existsSync(imgPath)) {
+                            fs.unlinkSync(imgPath);
+                            break; 
+                        }
+                    }
                 }
             }
             productData.image = `uploads/${req.file.filename}`;
