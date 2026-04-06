@@ -6,7 +6,7 @@ const userSchema = new mongoose.Schema({
     phone: { type: String, required: true, maxlength: 15 },
     email: { type: String, required: true, unique: true, maxlength: 100 },
     password: { type: String, required: true },
-    isAdmin: { type: Boolean, default: false } // Thay thế cho is_staff của Django
+    isAdmin: { type: Boolean, default: false }
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema);

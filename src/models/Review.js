@@ -10,14 +10,11 @@ const reviewSchema = new mongoose.Schema({
     content: { type: String, required: true },
     rating: { type: Number, default: 5 },
     
-    // Ánh xạ logic ForeignKey('self') của Django
     isParent: { type: Boolean, default: true },
     parentReview: { type: mongoose.Schema.Types.ObjectId, ref: 'Review', default: null },
-    
-    // Mảng này giúp Node.js lấy các câu trả lời nhanh hơn (tương đương related_name='replies')
     replies: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Review' }],
     
     isActive: { type: Boolean, default: true }
-}, { timestamps: true }); // Tương đương created_at = models.DateTimeField(auto_now_add=True)
+}, { timestamps: true });
 
 module.exports = mongoose.model('Review', reviewSchema);

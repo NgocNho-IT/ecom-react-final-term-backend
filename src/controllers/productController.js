@@ -2,15 +2,27 @@ const Product = require('../models/Product');
 const Category = require('../models/Category');
 const Review = require('../models/Review');
 
-// 1. LẤY DỮ LIỆU TRANG CHỦ (Sale + Tất cả sản phẩm)
 exports.getHomeData = async (req, res) => {
     try {
+        // --- LOGIC PHÂN TRANG (PAGINATION) CHO TRANG CHỦ ---
+        const page = parseInt(req.query.page) || 1; 
+        const limit = 12; 
+        const skip = (page - 1) * limit; 
+
+        // 1. Lấy sản phẩm đang giảm giá (luôn lấy 5 cái cho slide)
         const saleProducts = await Product.find({ "variants.isSale": true })
             .limit(5)
             .populate('category', 'name');
 
+        // 2. Đếm tổng số lượng sản phẩm để chia trang
+        const totalProducts = await Product.countDocuments();
+        const totalPages = Math.ceil(totalProducts / limit); 
+
+        // 3. Lấy sản phẩm theo trang hiện tại (Có skip và limit)
         const products = await Product.find()
             .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
             .populate('category', 'name');
 
         const categories = await Category.find();
@@ -19,14 +31,15 @@ exports.getHomeData = async (req, res) => {
             success: true, 
             saleProducts, 
             products, 
-            categories 
+            categories,
+            currentPage: page,  
+            totalPages          
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 2. CHI TIẾT SẢN PHẨM (Kèm sản phẩm liên quan và Đánh giá)
 exports.getProductDetail = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id).populate('category', 'name');
@@ -34,14 +47,11 @@ exports.getProductDetail = async (req, res) => {
         if (!product) {
             return res.status(404).json({ success: false, message: 'Không tìm thấy sản phẩm' });
         }
-
-        // Lấy sản phẩm cùng danh mục (liên quan)
         const relatedProducts = await Product.aggregate([
             { $match: { category: product.category._id, _id: { $ne: product._id } } },
             { $sample: { size: 4 } }
         ]);
 
-        // Lấy đánh giá gốc và các phản hồi của Admin
         const reviews = await Review.find({ product: product._id, isParent: true, isActive: true })
             .populate('replies')
             .sort({ createdAt: -1 });
@@ -57,24 +67,48 @@ exports.getProductDetail = async (req, res) => {
     }
 };
 
-// 3. TÌM KIẾM SẢN PHẨM
+// ==========================================
+// API TÌM KIẾM CÓ PHÂN TRANG
+// ==========================================
 exports.searchProducts = async (req, res) => {
     try {
         const query = req.query.q || '';
-        const products = await Product.find({
+        
+        // Logic phân trang
+        const page = parseInt(req.query.page) || 1;
+        const limit = 12;
+        const skip = (page - 1) * limit;
+
+        // Tạo điều kiện tìm kiếm
+        const searchCriteria = {
             $or: [
                 { name: { $regex: query, $options: 'i' } },
                 { description: { $regex: query, $options: 'i' } }
             ]
-        }).populate('category', 'name');
+        };
 
-        res.status(200).json({ success: true, count: products.length, products });
+        // Đếm tổng số để chia trang
+        const totalProducts = await Product.countDocuments(searchCriteria);
+        const totalPages = Math.ceil(totalProducts / limit);
+
+        // Lấy dữ liệu theo trang
+        const products = await Product.find(searchCriteria)
+            .skip(skip)
+            .limit(limit)
+            .populate('category', 'name');
+
+        res.status(200).json({ 
+            success: true, 
+            count: products.length, 
+            products,
+            currentPage: page,
+            totalPages 
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 4. LẤY TẤT CẢ DANH MỤC (Dùng cho Nav/Menu)
 exports.getCategories = async (req, res) => {
     try {
         const categories = await Category.find({});
@@ -84,32 +118,45 @@ exports.getCategories = async (req, res) => {
     }
 };
 
-// 5. LẤY SẢN PHẨM THEO DANH MỤC (ĐÃ FIX: Trả về categoryName cho React)
+// ==========================================
+// API LẤY SẢN PHẨM THEO DANH MỤC CÓ PHÂN TRANG
+// ==========================================
 exports.getProductsByCategory = async (req, res) => {
     try {
         const categoryId = req.params.id;
         
-        // Tìm thông tin danh mục trước để lấy cái Tên
+        // Logic phân trang
+        const page = parseInt(req.query.page) || 1;
+        const limit = 12;
+        const skip = (page - 1) * limit;
+
         const category = await Category.findById(categoryId);
-        
         if (!category) {
             return res.status(404).json({ success: false, message: 'Không tìm thấy danh mục này!' });
         }
 
-        // Tìm các sản phẩm thuộc danh mục đó
-        const products = await Product.find({ category: categoryId }).populate('category', 'name');
+        // Đếm tổng số SP trong danh mục để chia trang
+        const totalProducts = await Product.countDocuments({ category: categoryId });
+        const totalPages = Math.ceil(totalProducts / limit);
+
+        // Lấy dữ liệu theo trang
+        const products = await Product.find({ category: categoryId })
+            .skip(skip)
+            .limit(limit)
+            .populate('category', 'name');
 
         res.status(200).json({ 
             success: true, 
-            categoryName: category.name, // Đây là cái Nhớ cần để hiện lên Header nè!
-            products 
+            categoryName: category.name,
+            products,
+            currentPage: page,
+            totalPages
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// 6. KHÁCH HÀNG THÊM ĐÁNH GIÁ
 exports.addReview = async (req, res) => {
     try {
         const { rating, content } = req.body;
@@ -118,7 +165,7 @@ exports.addReview = async (req, res) => {
         const review = await Review.create({
             product: productId,
             user: req.user._id,
-            name: `${req.user.lastName} ${req.user.firstName}`, // Ghép tên chuẩn
+            name: `${req.user.lastName} ${req.user.firstName}`,
             phone: req.user.phone || '',
             email: req.user.email || '',
             rating: Number(rating),
@@ -132,7 +179,6 @@ exports.addReview = async (req, res) => {
     }
 };
 
-// 7. ADMIN PHẢN HỒI ĐÁNH GIÁ (Reply)
 exports.addReply = async (req, res) => {
     try {
         const { content } = req.body;
@@ -148,12 +194,11 @@ exports.addReply = async (req, res) => {
             user: req.user._id,
             name: req.user.isAdmin ? 'Admin NNIT Shop' : `${req.user.lastName} ${req.user.firstName}`,
             content,
-            rating: 5, // Mặc định phản hồi Admin là 5 sao
+            rating: 5,
             isParent: false,
             parentReview: parentId
         });
 
-        // Đưa ID của phản hồi này vào mảng replies của bình luận gốc để hiển thị dạng lồng nhau
         parentReview.replies.push(reply._id);
         await parentReview.save();
 
