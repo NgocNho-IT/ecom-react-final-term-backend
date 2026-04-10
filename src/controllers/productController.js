@@ -4,7 +4,7 @@ const Review = require('../models/Review');
 
 exports.getHomeData = async (req, res) => {
     try {
-        // --- LOGIC PHÂN TRANG (PAGINATION) CHO TRANG CHỦ ---
+        // --- LOGIC PHÂN TRANG (PAGINATION) CHUẨN ---
         const page = parseInt(req.query.page) || 1; 
         const limit = 12; 
         const skip = (page - 1) * limit; 
@@ -14,7 +14,7 @@ exports.getHomeData = async (req, res) => {
             .limit(5)
             .populate('category', 'name');
 
-        // 2. Đếm tổng số lượng sản phẩm để chia trang
+        // 2. Đếm tổng số lượng sản phẩm THỰC TẾ
         const totalProducts = await Product.countDocuments();
         const totalPages = Math.ceil(totalProducts / limit); 
 
@@ -33,7 +33,8 @@ exports.getHomeData = async (req, res) => {
             products, 
             categories,
             currentPage: page,  
-            totalPages          
+            totalPages,
+            totalItems: totalProducts // TRẢ VỀ SỐ LƯỢNG THỰC TẾ
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -68,18 +69,16 @@ exports.getProductDetail = async (req, res) => {
 };
 
 // ==========================================
-// API TÌM KIẾM CÓ PHÂN TRANG
+// API TÌM KIẾM CÓ PHÂN TRANG (CHUẨN 100%)
 // ==========================================
 exports.searchProducts = async (req, res) => {
     try {
         const query = req.query.q || '';
         
-        // Logic phân trang
         const page = parseInt(req.query.page) || 1;
         const limit = 12;
         const skip = (page - 1) * limit;
 
-        // Tạo điều kiện tìm kiếm
         const searchCriteria = {
             $or: [
                 { name: { $regex: query, $options: 'i' } },
@@ -87,11 +86,9 @@ exports.searchProducts = async (req, res) => {
             ]
         };
 
-        // Đếm tổng số để chia trang
         const totalProducts = await Product.countDocuments(searchCriteria);
         const totalPages = Math.ceil(totalProducts / limit);
 
-        // Lấy dữ liệu theo trang
         const products = await Product.find(searchCriteria)
             .skip(skip)
             .limit(limit)
@@ -99,7 +96,7 @@ exports.searchProducts = async (req, res) => {
 
         res.status(200).json({ 
             success: true, 
-            count: products.length, 
+            totalItems: totalProducts, // TRẢ VỀ SỐ LƯỢNG TÌM THẤY THỰC TẾ
             products,
             currentPage: page,
             totalPages 
@@ -125,7 +122,6 @@ exports.getProductsByCategory = async (req, res) => {
     try {
         const categoryId = req.params.id;
         
-        // Logic phân trang
         const page = parseInt(req.query.page) || 1;
         const limit = 12;
         const skip = (page - 1) * limit;
@@ -135,11 +131,9 @@ exports.getProductsByCategory = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Không tìm thấy danh mục này!' });
         }
 
-        // Đếm tổng số SP trong danh mục để chia trang
         const totalProducts = await Product.countDocuments({ category: categoryId });
         const totalPages = Math.ceil(totalProducts / limit);
 
-        // Lấy dữ liệu theo trang
         const products = await Product.find({ category: categoryId })
             .skip(skip)
             .limit(limit)
@@ -150,7 +144,8 @@ exports.getProductsByCategory = async (req, res) => {
             categoryName: category.name,
             products,
             currentPage: page,
-            totalPages
+            totalPages,
+            totalItems: totalProducts // TRẢ VỀ TỔNG SP TRONG DANH MỤC NÀY
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -185,9 +180,7 @@ exports.addReply = async (req, res) => {
         const parentId = req.params.reviewId;
         const parentReview = await Review.findById(parentId);
 
-        if (!parentReview) {
-            return res.status(404).json({ success: false, message: "Không thấy bình luận gốc để trả lời" });
-        }
+        if (!parentReview) return res.status(404).json({ success: false, message: "Không thấy bình luận gốc" });
 
         const reply = await Review.create({
             product: parentReview.product,
