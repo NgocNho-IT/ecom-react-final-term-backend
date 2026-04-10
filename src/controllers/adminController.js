@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
@@ -7,30 +8,28 @@ const path = require('path');
 const excelJS = require('exceljs');
 
 // =========================================================================
-// 1. LẤY DỮ LIỆU DASHBOARD (HỖ TRỢ FULL PHÂN TRANG CHO 4 MỤC)
+// 1. LẤY DỮ LIỆU DASHBOARD (THÊM LỌC NGÀY CHO ĐÁNH GIÁ)
 // =========================================================================
 exports.getDashboardData = async (req, res) => {
     try {
-        // Nhận các tham số tìm kiếm và số trang từ Frontend
         const { 
             orderPage = 1, orderSearch = '', orderStatus = 'all', orderDate = '',
             productPage = 1, productSearch = '', productCategory = 'all',
             categoryPage = 1, categorySearch = '',
-            reviewPage = 1 
+            reviewPage = 1, reviewSearch = '', reviewCategory = 'all', reviewDate = ''
         } = req.query;
 
-        const limit = 10; // Cố định mỗi trang hiển thị 10 dòng
+        const limit = 10; 
 
         // --- KHÚC 1: THỐNG KÊ TỔNG QUAN ---
         const deliveredOrdersForStats = await Order.find({ isShipped: true });
-        const totalRevenue = deliveredOrdersForStats.reduce((sum, order) => sum + order.amountPaid, 0);
+        const totalRevenue = deliveredOrdersForStats.reduce((sum, order) => sum + (order.amountPaid || 0), 0);
         const totalOrdersAll = await Order.countDocuments();
         const pendingCountAll = await Order.countDocuments({ isShipped: false });
         const shippedCountAll = deliveredOrdersForStats.length;
         const productsCountAll = await Product.countDocuments();
         const totalReviewsCountAll = await Review.countDocuments({ isParent: true });
 
-        // Biểu đồ doanh thu 7 ngày gần nhất
         const daysList = [];
         const revenuesList = [];
         for (let i = 6; i >= 0; i--) {
@@ -42,10 +41,10 @@ exports.getDashboardData = async (req, res) => {
             revenuesList.push(dailyRev);
         }
 
-        // --- KHÚC 2: PHÂN TRANG VÀ LỌC ĐƠN HÀNG ---
+        // --- KHÚC 2: ĐƠN HÀNG ---
         let orderQuery = {};
         if (orderSearch) {
-            if (orderSearch.length === 24) orderQuery._id = orderSearch;
+            if (mongoose.Types.ObjectId.isValid(orderSearch)) orderQuery._id = orderSearch;
             else orderQuery['shippingInfo.fullName'] = { $regex: orderSearch, $options: 'i' };
         }
         if (orderStatus === 'shipped') orderQuery.isShipped = true;
@@ -58,46 +57,85 @@ exports.getDashboardData = async (req, res) => {
         }
 
         const totalOrdersCount = await Order.countDocuments(orderQuery);
-        const orders = await Order.find(orderQuery)
-            .sort({ createdAt: -1 })
-            .skip((Number(orderPage) - 1) * limit)
-            .limit(limit);
+        const orders = await Order.find(orderQuery).sort({ createdAt: -1 }).skip((Number(orderPage) - 1) * limit).limit(limit);
 
-        // --- KHÚC 3: PHÂN TRANG VÀ LỌC SẢN PHẨM ---
+        // --- KHÚC 3: SẢN PHẨM ---
         let productQuery = {};
         if (productSearch) productQuery.name = { $regex: productSearch, $options: 'i' };
         if (productCategory && productCategory !== 'all') productQuery.category = productCategory;
 
         const totalProductsCount = await Product.countDocuments(productQuery);
-        const products = await Product.find(productQuery)
-            .populate('category', 'name')
-            .sort({ createdAt: -1 })
-            .skip((Number(productPage) - 1) * limit)
-            .limit(limit);
+        const products = await Product.find(productQuery).populate('category', 'name').sort({ createdAt: -1 }).skip((Number(productPage) - 1) * limit).limit(limit);
 
-        // --- KHÚC 4: PHÂN TRANG VÀ LỌC DANH MỤC ---
+        // --- KHÚC 4: DANH MỤC ---
         let categoryQuery = {};
         if (categorySearch) categoryQuery.name = { $regex: categorySearch, $options: 'i' };
 
         const totalCategoriesCount = await Category.countDocuments(categoryQuery);
-        const categories = await Category.find(categoryQuery)
-            .skip((Number(categoryPage) - 1) * limit)
-            .limit(limit);
-
+        const categories = await Category.find(categoryQuery).skip((Number(categoryPage) - 1) * limit).limit(limit);
         const categoriesWithCount = await Promise.all(categories.map(async (cat) => {
             const count = await Product.countDocuments({ category: cat._id });
             return { ...cat._doc, productCount: count };
         }));
 
-        // --- KHÚC 5: PHÂN TRANG ĐÁNH GIÁ (MỚI) ---
-        const totalReviewsCount = await Review.countDocuments({ isParent: true });
-        const reviews = await Review.find({ isParent: true })
-            .populate('product', 'name image')
-            .sort({ createdAt: -1 })
-            .skip((Number(reviewPage) - 1) * limit)
-            .limit(limit);
+        // --- KHÚC 5: ĐÁNH GIÁ (CÓ THÊM LỌC THEO NGÀY) ---
+        let reviewPipeline = [
+            { $match: { isParent: true } }, 
+            {
+                $lookup: {
+                    from: 'products',
+                    localField: 'product',
+                    foreignField: '_id',
+                    as: 'productInfo'
+                }
+            },
+            { $unwind: { path: '$productInfo', preserveNullAndEmptyArrays: true } }
+        ];
 
-        // TRẢ KẾT QUẢ TỔNG HỢP VỀ FRONTEND
+        if (reviewCategory && reviewCategory !== 'all' && mongoose.Types.ObjectId.isValid(reviewCategory)) {
+            reviewPipeline.push({ 
+                $match: { 'productInfo.category': new mongoose.Types.ObjectId(reviewCategory) } 
+            });
+        }
+
+        if (reviewSearch && reviewSearch.trim() !== '') {
+            reviewPipeline.push({
+                $match: {
+                    $or: [
+                        { content: { $regex: reviewSearch, $options: 'i' } },
+                        { 'productInfo.name': { $regex: reviewSearch, $options: 'i' } },
+                        { name: { $regex: reviewSearch, $options: 'i' } }
+                    ]
+                }
+            });
+        }
+
+        // LỌC THEO NGÀY ĐÁNH GIÁ
+        if (reviewDate && reviewDate.trim() !== '') {
+            const startOfDay = new Date(reviewDate);
+            startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(reviewDate);
+            endOfDay.setHours(23, 59, 59, 999);
+            reviewPipeline.push({
+                $match: {
+                    createdAt: { $gte: startOfDay, $lte: endOfDay }
+                }
+            });
+        }
+
+        const totalReviewsArray = await Review.aggregate([...reviewPipeline, { $count: "total" }]);
+        const totalReviewsCount = totalReviewsArray.length > 0 ? totalReviewsArray[0].total : 0;
+
+        reviewPipeline.push({ $sort: { createdAt: -1 } });
+        reviewPipeline.push({ $skip: (Number(reviewPage) - 1) * limit });
+        reviewPipeline.push({ $limit: limit });
+
+        const rawReviews = await Review.aggregate(reviewPipeline);
+        const reviews = rawReviews.map(rv => ({
+            ...rv,
+            product: rv.productInfo 
+        }));
+
         res.status(200).json({
             success: true, 
             totalRevenue, totalOrders: totalOrdersAll, pendingCount: pendingCountAll, shippedCount: shippedCountAll, totalProducts: productsCountAll, totalReviewsCountAll,
@@ -110,7 +148,38 @@ exports.getDashboardData = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 2. XÁC NHẬN GIAO HÀNG
+// ... Các hàm cũ (getOrderById, updateOrder, deleteOrder...) giữ nguyên
+exports.getOrderById = async (req, res) => {
+    try {
+        const order = await Order.findById(req.params.id);
+        if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng!' });
+        res.status(200).json({ success: true, order });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+
+exports.updateOrder = async (req, res) => {
+    try {
+        const { fullName, email, address, city, state, zipcode, status } = req.body;
+        const isShipped = status === 'Delivered';
+        
+        const order = await Order.findById(req.params.id);
+        if (!order) return res.status(404).json({ success: false, message: 'Không tìm thấy đơn hàng!' });
+
+        order.shippingInfo = { fullName, email, address, city, state, zipcode };
+        
+        if (isShipped && !order.isShipped) {
+            order.isShipped = true;
+            order.shippedAt = Date.now();
+        } else if (!isShipped) {
+            order.isShipped = false;
+            order.shippedAt = undefined;
+        }
+
+        await order.save();
+        res.status(200).json({ success: true, message: 'Cập nhật thành công!', order });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+
 exports.shipOrder = async (req, res) => {
     try {
         const order = await Order.findById(req.params.id);
@@ -122,7 +191,6 @@ exports.shipOrder = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 3. XÓA (HỦY) ĐƠN HÀNG VÀ HOÀN LẠI TỒN KHO
 exports.deleteOrder = async (req, res) => {
     try {
         const order = await Order.findById(req.params.id);
@@ -145,11 +213,10 @@ exports.deleteOrder = async (req, res) => {
             }
         }
         await Order.findByIdAndDelete(req.params.id);
-        res.status(200).json({ success: true, message: 'Đã hủy đơn và hoàn lại tồn kho thành công!' });
+        res.status(200).json({ success: true, message: 'Đã hủy đơn thành công!' });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 4. XÓA SẢN PHẨM VÀ XÓA LUÔN ẢNH
 exports.deleteProduct = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
@@ -164,17 +231,15 @@ exports.deleteProduct = async (req, res) => {
             }
         }
         await Product.findByIdAndDelete(req.params.id);
-        res.status(200).json({ success: true, message: 'Đã xóa sản phẩm và ảnh thành công!' });
+        res.status(200).json({ success: true, message: 'Đã xóa sản phẩm và ảnh!' });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 5. CẬP NHẬT SẢN PHẨM (BẢN SUPER FULL NÂNG CẤP)
 exports.updateProduct = async (req, res) => {
     try {
         const { id } = req.params;
         const { name, category, description, youtubeId, screen, os, cameraBack, cameraFront, cpu, battery, variants } = req.body;
 
-        // Xử lý cắt ID Youtube
         let finalYoutubeId = youtubeId;
         if (youtubeId && youtubeId.trim() !== '') {
             const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
@@ -191,7 +256,6 @@ exports.updateProduct = async (req, res) => {
             }
         };
 
-        // Cập nhật biến thể và tự động tính toán
         if (variants && typeof variants === 'string') {
             const parsedVariants = JSON.parse(variants);
             productData.variants = parsedVariants;
@@ -201,7 +265,6 @@ exports.updateProduct = async (req, res) => {
             }
         }
 
-        // Xử lý thay ảnh mới
         if (req.file) {
             if (id && id !== "undefined") {
                 const oldProduct = await Product.findById(id);
@@ -218,7 +281,6 @@ exports.updateProduct = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: "Lỗi hệ thống: " + error.message }); }
 };
 
-// 6. XÓA ĐÁNH GIÁ (MỚI - CẬP NHẬT LẠI ĐIỂM SẢN PHẨM)
 exports.deleteReview = async (req, res) => {
     try {
         const review = await Review.findById(req.params.id);
@@ -227,7 +289,6 @@ exports.deleteReview = async (req, res) => {
         const productId = review.product;
         await Review.findByIdAndDelete(req.params.id);
         
-        // Sau khi xóa, tính toán lại điểm trung bình cho sản phẩm
         const allReviews = await Review.find({ product: productId, isParent: true, isActive: true });
         const numReviews = allReviews.length;
         const avgRating = numReviews > 0 ? (allReviews.reduce((sum, item) => item.rating + sum, 0) / numReviews) : 0;
@@ -241,7 +302,6 @@ exports.deleteReview = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 7. DANH MỤC
 exports.deleteCategory = async (req, res) => {
     try {
         const productCount = await Product.countDocuments({ category: req.params.id });
@@ -258,9 +318,6 @@ exports.updateCategory = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// =========================================================================
-// 8. HÀM XUẤT EXCEL (GIỮ NGUYÊN ĐỊNH DẠNG CHI TIẾT CỦA BẢN GỐC)
-// =========================================================================
 exports.exportRevenueExcel = async (req, res) => {
     try {
         const workbook = new excelJS.Workbook();
@@ -274,14 +331,12 @@ exports.exportRevenueExcel = async (req, res) => {
             { key: 'amount', width: 25 }
         ];
 
-        // Header: Tên cửa hàng
         worksheet.mergeCells('A1', 'E1');
         const storeName = worksheet.getCell('A1');
         storeName.value = 'HỆ THỐNG CỬA HÀNG ĐIỆN THOẠI NNIT SHOP';
         storeName.font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FF555555' } };
         storeName.alignment = { vertical: 'middle', horizontal: 'center' };
 
-        // Header: Tiêu đề báo cáo
         worksheet.mergeCells('A2', 'E2');
         const titleCell = worksheet.getCell('A2');
         titleCell.value = 'BÁO CÁO DOANH THU BÁN HÀNG';
@@ -289,16 +344,14 @@ exports.exportRevenueExcel = async (req, res) => {
         titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
         worksheet.getRow(2).height = 30;
 
-        // Header: Ngày xuất
         worksheet.mergeCells('A3', 'E3');
         const dateCell = worksheet.getCell('A3');
         dateCell.value = `Thời gian trích xuất: ${new Date().toLocaleString('vi-VN')}`;
         dateCell.font = { name: 'Arial', size: 11, italic: true, color: { argb: 'FF888888' } };
         dateCell.alignment = { vertical: 'middle', horizontal: 'center' };
 
-        worksheet.addRow([]); // Dòng trống
+        worksheet.addRow([]); 
 
-        // Row tiêu đề bảng
         const headerRow = worksheet.getRow(5);
         headerRow.values = ['STT', 'Mã Đơn Hàng', 'Tên Khách Hàng', 'Ngày Giao', 'Tổng Tiền (VNĐ)'];
         headerRow.height = 25;
@@ -356,7 +409,6 @@ exports.exportRevenueExcel = async (req, res) => {
             cell.border = { top: { style: 'medium', color: { argb: 'FF198754' } }, bottom: { style: 'medium', color: { argb: 'FF198754' } }, left: { style: 'thin', color: { argb: 'FF198754' } }, right: { style: 'thin', color: { argb: 'FF198754' } } };
         });
 
-        // Chữ ký báo cáo
         const footerRowIndex = rowIndex + 2;
         worksheet.mergeCells(`D${footerRowIndex}`, `E${footerRowIndex}`);
         const signatureCell = worksheet.getCell(`D${footerRowIndex}`);
@@ -378,15 +430,16 @@ exports.exportRevenueExcel = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: "Lỗi Excel: " + error.message }); }
 };
 
-// Lấy danh sách đánh giá có lọc và tìm kiếm dành cho Admin
+// =========================================================================
+// 11. API CHO TRANG ĐÁNH GIÁ RIÊNG (CÓ LỌC THEO NGÀY)
+// =========================================================================
 exports.getAllReviewsAdmin = async (req, res) => {
     try {
-        const { page = 1, limit = 10, search = '', category = '' } = req.query;
+        const { page = 1, limit = 10, search = '', category = '', date = '' } = req.query; 
         const skip = (Number(page) - 1) * Number(limit);
 
-        // Khởi tạo pipeline để join (lookup) với bảng Product và Category
         let pipeline = [
-            { $match: { isParent: true } }, // Chỉ lấy bình luận gốc, không lấy reply
+            { $match: { isParent: true } }, 
             {
                 $lookup: {
                     from: 'products',
@@ -395,18 +448,16 @@ exports.getAllReviewsAdmin = async (req, res) => {
                     as: 'productInfo'
                 }
             },
-            { $unwind: '$productInfo' }
+            { $unwind: { path: '$productInfo', preserveNullAndEmptyArrays: true } }
         ];
 
-        // Lọc theo Danh mục sản phẩm
-        if (category) {
+        if (category && category !== '' && mongoose.Types.ObjectId.isValid(category)) {
             pipeline.push({ 
                 $match: { 'productInfo.category': new mongoose.Types.ObjectId(category) } 
             });
         }
 
-        // Tìm kiếm theo tên Sản phẩm hoặc nội dung Bình luận hoặc tên Khách hàng
-        if (search) {
+        if (search && search.trim() !== '') {
             pipeline.push({
                 $match: {
                     $or: [
@@ -418,11 +469,22 @@ exports.getAllReviewsAdmin = async (req, res) => {
             });
         }
 
-        // Đếm tổng số lượng để phân trang
+        // LỌC THEO NGÀY
+        if (date && date.trim() !== '') {
+            const startOfDay = new Date(date);
+            startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(date);
+            endOfDay.setHours(23, 59, 59, 999);
+            pipeline.push({
+                $match: {
+                    createdAt: { $gte: startOfDay, $lte: endOfDay }
+                }
+            });
+        }
+
         const totalItemsArray = await Review.aggregate([...pipeline, { $count: "total" }]);
         const totalItems = totalItemsArray.length > 0 ? totalItemsArray[0].total : 0;
 
-        // Thực hiện phân trang và sắp xếp mới nhất
         const reviews = await Review.aggregate([
             ...pipeline,
             { $sort: { createdAt: -1 } },
@@ -431,13 +493,9 @@ exports.getAllReviewsAdmin = async (req, res) => {
         ]);
 
         res.status(200).json({
-            success: true,
-            reviews,
-            totalItems,
+            success: true, reviews, totalItems,
             totalPages: Math.ceil(totalItems / limit),
             currentPage: Number(page)
         });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
+    } catch (error) { res.status(500).json({ success: false, message: "Lỗi Server: " + error.message }); }
 };

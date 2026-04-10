@@ -70,6 +70,8 @@ router.delete('/category/:id', protect, admin, adminController.deleteCategory);
 router.put('/category/:id', protect, admin, adminController.updateCategory);
 
 // 3. Quản lý Đơn hàng (Orders)
+router.get('/order/:id', protect, admin, adminController.getOrderById); // <--- DÒNG THIẾU GÂY RA LỖI ĐANG TẢI
+router.put('/order/:id', protect, admin, adminController.updateOrder);  // <--- DÒNG THIẾU LÀM LỖI LƯU ĐƠN HÀNG
 router.put('/order/:id/ship', protect, admin, adminController.shipOrder);
 router.delete('/order/:id', protect, admin, adminController.deleteOrder);
 
@@ -78,9 +80,8 @@ router.post('/product', protect, admin, upload.single('image'), adminController.
 router.put('/product/:id', protect, admin, upload.single('image'), adminController.updateProduct);
 router.delete('/product/:id', protect, admin, adminController.deleteProduct);
 
-// 5. Quản lý Đánh giá (Reviews) - MỚI BỔ SUNG
-// Route này cho phép Admin xóa vĩnh viễn các đánh giá rác từ khách hàng
+// 5. Quản lý Đánh giá (Reviews)
 router.delete('/review/:id', protect, admin, adminController.deleteReview);
-// Thêm vào cùng nhóm với các route admin khác
 router.get('/reviews', protect, admin, adminController.getAllReviewsAdmin);
+
 module.exports = router;
