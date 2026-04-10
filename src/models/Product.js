@@ -17,7 +17,10 @@ const productSchema = new mongoose.Schema({
     description: { type: String, default: '' },
     image: { type: String, required: true },
     
-    // Thông số kỹ thuật
+    // ĐÃ THÊM: Lưu trữ điểm trung bình và số lượng đánh giá
+    rating: { type: Number, default: 0 },
+    numReviews: { type: Number, default: 0 },
+
     specs: {
         screen: { type: String },
         os: { type: String },
@@ -26,9 +29,7 @@ const productSchema = new mongoose.Schema({
         cpu: { type: String },
         battery: { type: String }
     },
-    
     youtubeId: { type: String },
-    
     variants: [variantSchema]
 
 }, { timestamps: true });

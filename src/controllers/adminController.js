@@ -1,45 +1,48 @@
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
+const Review = require('../models/Review'); 
 const fs = require('fs');
 const path = require('path');
 const excelJS = require('exceljs');
 
-// 1. LẤY DỮ LIỆU ĐỂ HIỂN THỊ DASHBOARD (FULL SERVER-SIDE PAGINATION)
+// =========================================================================
+// 1. LẤY DỮ LIỆU DASHBOARD (HỖ TRỢ FULL PHÂN TRANG CHO 4 MỤC)
+// =========================================================================
 exports.getDashboardData = async (req, res) => {
     try {
-        // Hứng các tham số tìm kiếm và số trang từ Frontend
+        // Nhận các tham số tìm kiếm và số trang từ Frontend
         const { 
             orderPage = 1, orderSearch = '', orderStatus = 'all', orderDate = '',
             productPage = 1, productSearch = '', productCategory = 'all',
-            categoryPage = 1, categorySearch = ''
+            categoryPage = 1, categorySearch = '',
+            reviewPage = 1 
         } = req.query;
 
         const limit = 10; // Cố định mỗi trang hiển thị 10 dòng
 
-        // ==========================================
-        // KHÚC 1: THỐNG KÊ TỔNG QUAN (Tính tổng)
-        // ==========================================
-        const deliveredOrders = await Order.find({ isShipped: true });
-        const totalRevenue = deliveredOrders.reduce((sum, order) => sum + order.amountPaid, 0);
+        // --- KHÚC 1: THỐNG KÊ TỔNG QUAN ---
+        const deliveredOrdersForStats = await Order.find({ isShipped: true });
+        const totalRevenue = deliveredOrdersForStats.reduce((sum, order) => sum + order.amountPaid, 0);
         const totalOrdersAll = await Order.countDocuments();
         const pendingCountAll = await Order.countDocuments({ isShipped: false });
-        const shippedCountAll = deliveredOrders.length;
+        const shippedCountAll = deliveredOrdersForStats.length;
         const productsCountAll = await Product.countDocuments();
+        const totalReviewsCountAll = await Review.countDocuments({ isParent: true });
 
+        // Biểu đồ doanh thu 7 ngày gần nhất
         const daysList = [];
         const revenuesList = [];
         for (let i = 6; i >= 0; i--) {
             const d = new Date(); d.setDate(d.getDate() - i); d.setHours(0, 0, 0, 0);
             const nextD = new Date(d); nextD.setDate(nextD.getDate() + 1);
             const dailyOrders = await Order.find({ isShipped: true, createdAt: { $gte: d, $lt: nextD } });
+            const dailyRev = dailyOrders.reduce((sum, ord) => sum + ord.amountPaid, 0);
             daysList.push(`${d.getDate()}/${d.getMonth() + 1}`);
-            revenuesList.push(dailyOrders.reduce((sum, ord) => sum + ord.amountPaid, 0));
+            revenuesList.push(dailyRev);
         }
 
-        // ==========================================
-        // KHÚC 2: PHÂN TRANG VÀ LỌC ĐƠN HÀNG
-        // ==========================================
+        // --- KHÚC 2: PHÂN TRANG VÀ LỌC ĐƠN HÀNG ---
         let orderQuery = {};
         if (orderSearch) {
             if (orderSearch.length === 24) orderQuery._id = orderSearch;
@@ -60,9 +63,7 @@ exports.getDashboardData = async (req, res) => {
             .skip((Number(orderPage) - 1) * limit)
             .limit(limit);
 
-        // ==========================================
-        // KHÚC 3: PHÂN TRANG VÀ LỌC SẢN PHẨM
-        // ==========================================
+        // --- KHÚC 3: PHÂN TRANG VÀ LỌC SẢN PHẨM ---
         let productQuery = {};
         if (productSearch) productQuery.name = { $regex: productSearch, $options: 'i' };
         if (productCategory && productCategory !== 'all') productQuery.category = productCategory;
@@ -74,9 +75,7 @@ exports.getDashboardData = async (req, res) => {
             .skip((Number(productPage) - 1) * limit)
             .limit(limit);
 
-        // ==========================================
-        // KHÚC 4: PHÂN TRANG VÀ LỌC DANH MỤC
-        // ==========================================
+        // --- KHÚC 4: PHÂN TRANG VÀ LỌC DANH MỤC ---
         let categoryQuery = {};
         if (categorySearch) categoryQuery.name = { $regex: categorySearch, $options: 'i' };
 
@@ -90,14 +89,23 @@ exports.getDashboardData = async (req, res) => {
             return { ...cat._doc, productCount: count };
         }));
 
-        // TRẢ KẾT QUẢ VỀ FRONTEND
+        // --- KHÚC 5: PHÂN TRANG ĐÁNH GIÁ (MỚI) ---
+        const totalReviewsCount = await Review.countDocuments({ isParent: true });
+        const reviews = await Review.find({ isParent: true })
+            .populate('product', 'name image')
+            .sort({ createdAt: -1 })
+            .skip((Number(reviewPage) - 1) * limit)
+            .limit(limit);
+
+        // TRẢ KẾT QUẢ TỔNG HỢP VỀ FRONTEND
         res.status(200).json({
             success: true, 
-            totalRevenue, totalOrders: totalOrdersAll, pendingCount: pendingCountAll, shippedCount: shippedCountAll, totalProducts: productsCountAll,
+            totalRevenue, totalOrders: totalOrdersAll, pendingCount: pendingCountAll, shippedCount: shippedCountAll, totalProducts: productsCountAll, totalReviewsCountAll,
             daysList, revenuesList, 
             orders, totalOrdersCount,
             products, totalProductsCount,
-            categories: categoriesWithCount, totalCategoriesCount
+            categories: categoriesWithCount, totalCategoriesCount,
+            reviews, totalReviewsCount
         });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
@@ -107,7 +115,8 @@ exports.shipOrder = async (req, res) => {
     try {
         const order = await Order.findById(req.params.id);
         if (!order) return res.status(404).json({ success: false, message: 'Không thấy đơn!' });
-        order.isShipped = true; order.shippedAt = Date.now();
+        order.isShipped = true; 
+        order.shippedAt = Date.now();
         await order.save();
         res.status(200).json({ success: true, message: `Đã xác nhận đơn hàng #${order._id}` });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
@@ -140,7 +149,7 @@ exports.deleteOrder = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 4. XÓA SẢN PHẨM
+// 4. XÓA SẢN PHẨM VÀ XÓA LUÔN ẢNH
 exports.deleteProduct = async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
@@ -159,12 +168,13 @@ exports.deleteProduct = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 5. CẬP NHẬT SẢN PHẨM
+// 5. CẬP NHẬT SẢN PHẨM (BẢN SUPER FULL NÂNG CẤP)
 exports.updateProduct = async (req, res) => {
     try {
         const { id } = req.params;
         const { name, category, description, youtubeId, screen, os, cameraBack, cameraFront, cpu, battery, variants } = req.body;
 
+        // Xử lý cắt ID Youtube
         let finalYoutubeId = youtubeId;
         if (youtubeId && youtubeId.trim() !== '') {
             const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
@@ -175,9 +185,13 @@ exports.updateProduct = async (req, res) => {
 
         let productData = {
             name, category, description, youtubeId: finalYoutubeId,
-            specs: { screen: screen || "", os: os || "", cameraBack: cameraBack || "", cameraFront: cameraFront || "", cpu: cpu || "", battery: battery || "" }
+            specs: { 
+                screen: screen || "", os: os || "", cameraBack: cameraBack || "", 
+                cameraFront: cameraFront || "", cpu: cpu || "", battery: battery || "" 
+            }
         };
 
+        // Cập nhật biến thể và tự động tính toán
         if (variants && typeof variants === 'string') {
             const parsedVariants = JSON.parse(variants);
             productData.variants = parsedVariants;
@@ -187,28 +201,47 @@ exports.updateProduct = async (req, res) => {
             }
         }
 
+        // Xử lý thay ảnh mới
         if (req.file) {
             if (id && id !== "undefined") {
                 const oldProduct = await Product.findById(id);
                 if (oldProduct && oldProduct.image) {
-                    const possiblePaths = [
-                        path.join(__dirname, '../../public', oldProduct.image),
-                        path.join(__dirname, '../public', oldProduct.image),
-                        path.join(process.cwd(), 'public', oldProduct.image)
-                    ];
-                    for (let imgPath of possiblePaths) {
-                        if (fs.existsSync(imgPath)) { fs.unlinkSync(imgPath); break; }
-                    }
+                    const oldPath = path.join(process.cwd(), 'public', oldProduct.image);
+                    if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
                 }
             }
             productData.image = `uploads/${req.file.filename}`;
         }
+
         const product = await Product.findByIdAndUpdate(id, productData, { returnDocument: 'after', runValidators: true });
         res.status(200).json({ success: true, message: 'Lưu thành công!', product });
     } catch (error) { res.status(500).json({ success: false, message: "Lỗi hệ thống: " + error.message }); }
 };
 
-// 6. XÓA DANH MỤC
+// 6. XÓA ĐÁNH GIÁ (MỚI - CẬP NHẬT LẠI ĐIỂM SẢN PHẨM)
+exports.deleteReview = async (req, res) => {
+    try {
+        const review = await Review.findById(req.params.id);
+        if (!review) return res.status(404).json({ success: false, message: 'Không tìm thấy đánh giá!' });
+
+        const productId = review.product;
+        await Review.findByIdAndDelete(req.params.id);
+        
+        // Sau khi xóa, tính toán lại điểm trung bình cho sản phẩm
+        const allReviews = await Review.find({ product: productId, isParent: true, isActive: true });
+        const numReviews = allReviews.length;
+        const avgRating = numReviews > 0 ? (allReviews.reduce((sum, item) => item.rating + sum, 0) / numReviews) : 0;
+
+        await Product.findByIdAndUpdate(productId, {
+            rating: Number(avgRating.toFixed(1)),
+            numReviews: numReviews
+        });
+
+        res.status(200).json({ success: true, message: 'Đã xóa đánh giá thành công!' });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+
+// 7. DANH MỤC
 exports.deleteCategory = async (req, res) => {
     try {
         const productCount = await Product.countDocuments({ category: req.params.id });
@@ -218,7 +251,6 @@ exports.deleteCategory = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 7. CẬP NHẬT DANH MỤC
 exports.updateCategory = async (req, res) => {
     try {
         const category = await Category.findByIdAndUpdate(req.params.id, req.body, { new: true });
@@ -226,20 +258,30 @@ exports.updateCategory = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 8. HÀM XUẤT EXCEL (Giữ nguyên)
+// =========================================================================
+// 8. HÀM XUẤT EXCEL (GIỮ NGUYÊN ĐỊNH DẠNG CHI TIẾT CỦA BẢN GỐC)
+// =========================================================================
 exports.exportRevenueExcel = async (req, res) => {
     try {
         const workbook = new excelJS.Workbook();
         const worksheet = workbook.addWorksheet('Doanh Thu', { views: [{ showGridLines: false }] });
 
-        worksheet.columns = [ { key: 'stt', width: 10 }, { key: 'id', width: 35 }, { key: 'customer', width: 35 }, { key: 'date', width: 20 }, { key: 'amount', width: 25 } ];
+        worksheet.columns = [
+            { key: 'stt', width: 10 },
+            { key: 'id', width: 35 },
+            { key: 'customer', width: 35 },
+            { key: 'date', width: 20 },
+            { key: 'amount', width: 25 }
+        ];
 
+        // Header: Tên cửa hàng
         worksheet.mergeCells('A1', 'E1');
         const storeName = worksheet.getCell('A1');
         storeName.value = 'HỆ THỐNG CỬA HÀNG ĐIỆN THOẠI NNIT SHOP';
         storeName.font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FF555555' } };
         storeName.alignment = { vertical: 'middle', horizontal: 'center' };
 
+        // Header: Tiêu đề báo cáo
         worksheet.mergeCells('A2', 'E2');
         const titleCell = worksheet.getCell('A2');
         titleCell.value = 'BÁO CÁO DOANH THU BÁN HÀNG';
@@ -247,14 +289,16 @@ exports.exportRevenueExcel = async (req, res) => {
         titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
         worksheet.getRow(2).height = 30;
 
+        // Header: Ngày xuất
         worksheet.mergeCells('A3', 'E3');
         const dateCell = worksheet.getCell('A3');
-        const today = new Date();
-        dateCell.value = `Thời gian trích xuất: ${today.toLocaleTimeString('vi-VN')} - Ngày ${today.toLocaleDateString('vi-VN')}`;
+        dateCell.value = `Thời gian trích xuất: ${new Date().toLocaleString('vi-VN')}`;
         dateCell.font = { name: 'Arial', size: 11, italic: true, color: { argb: 'FF888888' } };
         dateCell.alignment = { vertical: 'middle', horizontal: 'center' };
 
-        worksheet.addRow([]);
+        worksheet.addRow([]); // Dòng trống
+
+        // Row tiêu đề bảng
         const headerRow = worksheet.getRow(5);
         headerRow.values = ['STT', 'Mã Đơn Hàng', 'Tên Khách Hàng', 'Ngày Giao', 'Tổng Tiền (VNĐ)'];
         headerRow.height = 25;
@@ -262,15 +306,22 @@ exports.exportRevenueExcel = async (req, res) => {
             cell.font = { name: 'Arial', bold: true, color: { argb: 'FFFFFFFF' } };
             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF145A32' } };
             cell.alignment = { vertical: 'middle', horizontal: 'center' };
-            cell.border = { top: { style: 'thin', color: { argb: 'FF145A32' } }, left: { style: 'thin', color: { argb: 'FF145A32' } }, bottom: { style: 'thin', color: { argb: 'FF145A32' } }, right: { style: 'thin', color: { argb: 'FF145A32' } } };
+            cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
         });
 
         const deliveredOrders = await Order.find({ isShipped: true }).sort({ shippedAt: -1 });
-        let totalRevenue = 0; let rowIndex = 6;
+        let totalRevenue = 0;
+        let rowIndex = 6;
 
         deliveredOrders.forEach((order, index) => {
             totalRevenue += order.amountPaid;
-            const row = worksheet.addRow({ stt: index + 1, id: order._id.toString(), customer: order.shippingInfo?.fullName || 'Khách vãng lai', date: order.shippedAt ? new Date(order.shippedAt).toLocaleDateString('vi-VN') : 'N/A', amount: order.amountPaid });
+            const row = worksheet.addRow({ 
+                stt: index + 1, 
+                id: order._id.toString(), 
+                customer: order.shippingInfo?.fullName || 'Khách vãng lai', 
+                date: order.shippedAt ? new Date(order.shippedAt).toLocaleDateString('vi-VN') : 'N/A', 
+                amount: order.amountPaid 
+            });
             row.height = 22;
             const rowColor = index % 2 === 0 ? 'FFFFFFFF' : 'FFF8F9FA'; 
             row.eachCell((cell, colNumber) => {
@@ -305,6 +356,7 @@ exports.exportRevenueExcel = async (req, res) => {
             cell.border = { top: { style: 'medium', color: { argb: 'FF198754' } }, bottom: { style: 'medium', color: { argb: 'FF198754' } }, left: { style: 'thin', color: { argb: 'FF198754' } }, right: { style: 'thin', color: { argb: 'FF198754' } } };
         });
 
+        // Chữ ký báo cáo
         const footerRowIndex = rowIndex + 2;
         worksheet.mergeCells(`D${footerRowIndex}`, `E${footerRowIndex}`);
         const signatureCell = worksheet.getCell(`D${footerRowIndex}`);
@@ -323,5 +375,69 @@ exports.exportRevenueExcel = async (req, res) => {
 
         await workbook.xlsx.write(res);
         res.status(200).end();
-    } catch (error) { res.status(500).json({ success: false, message: "Lỗi tạo file Excel: " + error.message }); }
+    } catch (error) { res.status(500).json({ success: false, message: "Lỗi Excel: " + error.message }); }
+};
+
+// Lấy danh sách đánh giá có lọc và tìm kiếm dành cho Admin
+exports.getAllReviewsAdmin = async (req, res) => {
+    try {
+        const { page = 1, limit = 10, search = '', category = '' } = req.query;
+        const skip = (Number(page) - 1) * Number(limit);
+
+        // Khởi tạo pipeline để join (lookup) với bảng Product và Category
+        let pipeline = [
+            { $match: { isParent: true } }, // Chỉ lấy bình luận gốc, không lấy reply
+            {
+                $lookup: {
+                    from: 'products',
+                    localField: 'product',
+                    foreignField: '_id',
+                    as: 'productInfo'
+                }
+            },
+            { $unwind: '$productInfo' }
+        ];
+
+        // Lọc theo Danh mục sản phẩm
+        if (category) {
+            pipeline.push({ 
+                $match: { 'productInfo.category': new mongoose.Types.ObjectId(category) } 
+            });
+        }
+
+        // Tìm kiếm theo tên Sản phẩm hoặc nội dung Bình luận hoặc tên Khách hàng
+        if (search) {
+            pipeline.push({
+                $match: {
+                    $or: [
+                        { content: { $regex: search, $options: 'i' } },
+                        { 'productInfo.name': { $regex: search, $options: 'i' } },
+                        { name: { $regex: search, $options: 'i' } }
+                    ]
+                }
+            });
+        }
+
+        // Đếm tổng số lượng để phân trang
+        const totalItemsArray = await Review.aggregate([...pipeline, { $count: "total" }]);
+        const totalItems = totalItemsArray.length > 0 ? totalItemsArray[0].total : 0;
+
+        // Thực hiện phân trang và sắp xếp mới nhất
+        const reviews = await Review.aggregate([
+            ...pipeline,
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: Number(limit) }
+        ]);
+
+        res.status(200).json({
+            success: true,
+            reviews,
+            totalItems,
+            totalPages: Math.ceil(totalItems / limit),
+            currentPage: Number(page)
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };

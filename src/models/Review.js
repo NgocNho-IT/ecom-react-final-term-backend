@@ -8,7 +8,9 @@ const reviewSchema = new mongoose.Schema({
     phone: { type: String, default: '' },
     email: { type: String, default: '' },
     content: { type: String, required: true },
-    rating: { type: Number, default: 5 },
+    
+    // ĐÃ SỬA: Đảm bảo dữ liệu chuẩn 1-5 sao
+    rating: { type: Number, default: 5, min: 1, max: 5 },
     
     isParent: { type: Boolean, default: true },
     parentReview: { type: mongoose.Schema.Types.ObjectId, ref: 'Review', default: null },
