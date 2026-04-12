@@ -17,9 +17,10 @@ const productSchema = new mongoose.Schema({
     description: { type: String, default: '' },
     image: { type: String, required: true },
     
-    // ĐÃ THÊM: Lưu trữ điểm trung bình và số lượng đánh giá
+    // Lưu trữ đánh giá và ĐÃ BÁN
     rating: { type: Number, default: 0 },
     numReviews: { type: Number, default: 0 },
+    sold: { type: Number, default: 0 }, // <--- MỚI THÊM VÀO ĐÂY
 
     specs: {
         screen: { type: String },

@@ -3,6 +3,7 @@ const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
 const Review = require('../models/Review'); 
+const User = require('../models/User');
 const fs = require('fs');
 const path = require('path');
 const excelJS = require('exceljs');
@@ -16,12 +17,13 @@ exports.getDashboardData = async (req, res) => {
             orderPage = 1, orderSearch = '', orderStatus = 'all', orderDate = '',
             productPage = 1, productSearch = '', productCategory = 'all',
             categoryPage = 1, categorySearch = '',
-            reviewPage = 1, reviewSearch = '', reviewCategory = 'all', reviewDate = ''
+            reviewPage = 1, reviewSearch = '', reviewCategory = 'all', reviewDate = '',
+            userPage = 1, userSearch = '', userRole = 'all' // MỚI: Thêm params cho User
         } = req.query;
 
         const limit = 10; 
 
-        // --- KHÚC 1: THỐNG KÊ TỔNG QUAN ---
+        // Khúc 1: Thống kê
         const deliveredOrdersForStats = await Order.find({ isShipped: true });
         const totalRevenue = deliveredOrdersForStats.reduce((sum, order) => sum + (order.amountPaid || 0), 0);
         const totalOrdersAll = await Order.countDocuments();
@@ -29,6 +31,7 @@ exports.getDashboardData = async (req, res) => {
         const shippedCountAll = deliveredOrdersForStats.length;
         const productsCountAll = await Product.countDocuments();
         const totalReviewsCountAll = await Review.countDocuments({ isParent: true });
+        const totalUsersAll = await User.countDocuments(); // Thống kê tổng User
 
         const daysList = [];
         const revenuesList = [];
@@ -41,7 +44,7 @@ exports.getDashboardData = async (req, res) => {
             revenuesList.push(dailyRev);
         }
 
-        // --- KHÚC 2: ĐƠN HÀNG ---
+        // Khúc 2,3,4,5: Đơn hàng, Sản phẩm, Danh mục (Giữ nguyên logic cũ)
         let orderQuery = {};
         if (orderSearch) {
             if (mongoose.Types.ObjectId.isValid(orderSearch)) orderQuery._id = orderSearch;
@@ -49,28 +52,22 @@ exports.getDashboardData = async (req, res) => {
         }
         if (orderStatus === 'shipped') orderQuery.isShipped = true;
         else if (orderStatus === 'pending') orderQuery.isShipped = false;
-        
         if (orderDate) {
             const startDate = new Date(orderDate);
             const endDate = new Date(orderDate); endDate.setDate(endDate.getDate() + 1);
             orderQuery.createdAt = { $gte: startDate, $lt: endDate };
         }
-
         const totalOrdersCount = await Order.countDocuments(orderQuery);
         const orders = await Order.find(orderQuery).sort({ createdAt: -1 }).skip((Number(orderPage) - 1) * limit).limit(limit);
 
-        // --- KHÚC 3: SẢN PHẨM ---
         let productQuery = {};
         if (productSearch) productQuery.name = { $regex: productSearch, $options: 'i' };
         if (productCategory && productCategory !== 'all') productQuery.category = productCategory;
-
         const totalProductsCount = await Product.countDocuments(productQuery);
         const products = await Product.find(productQuery).populate('category', 'name').sort({ createdAt: -1 }).skip((Number(productPage) - 1) * limit).limit(limit);
 
-        // --- KHÚC 4: DANH MỤC ---
         let categoryQuery = {};
         if (categorySearch) categoryQuery.name = { $regex: categorySearch, $options: 'i' };
-
         const totalCategoriesCount = await Category.countDocuments(categoryQuery);
         const categories = await Category.find(categoryQuery).skip((Number(categoryPage) - 1) * limit).limit(limit);
         const categoriesWithCount = await Promise.all(categories.map(async (cat) => {
@@ -78,72 +75,55 @@ exports.getDashboardData = async (req, res) => {
             return { ...cat._doc, productCount: count };
         }));
 
-        // --- KHÚC 5: ĐÁNH GIÁ (CÓ THÊM LỌC THEO NGÀY) ---
         let reviewPipeline = [
             { $match: { isParent: true } }, 
-            {
-                $lookup: {
-                    from: 'products',
-                    localField: 'product',
-                    foreignField: '_id',
-                    as: 'productInfo'
-                }
-            },
+            { $lookup: { from: 'products', localField: 'product', foreignField: '_id', as: 'productInfo' } },
             { $unwind: { path: '$productInfo', preserveNullAndEmptyArrays: true } }
         ];
-
         if (reviewCategory && reviewCategory !== 'all' && mongoose.Types.ObjectId.isValid(reviewCategory)) {
-            reviewPipeline.push({ 
-                $match: { 'productInfo.category': new mongoose.Types.ObjectId(reviewCategory) } 
-            });
+            reviewPipeline.push({ $match: { 'productInfo.category': new mongoose.Types.ObjectId(reviewCategory) } });
         }
-
-        if (reviewSearch && reviewSearch.trim() !== '') {
+        if (reviewSearch && String(reviewSearch).trim() !== '') {
             reviewPipeline.push({
-                $match: {
-                    $or: [
-                        { content: { $regex: reviewSearch, $options: 'i' } },
-                        { 'productInfo.name': { $regex: reviewSearch, $options: 'i' } },
-                        { name: { $regex: reviewSearch, $options: 'i' } }
-                    ]
-                }
+                $match: { $or: [ { content: { $regex: reviewSearch, $options: 'i' } }, { 'productInfo.name': { $regex: reviewSearch, $options: 'i' } }, { name: { $regex: reviewSearch, $options: 'i' } } ] }
             });
         }
-
-        // LỌC THEO NGÀY ĐÁNH GIÁ
-        if (reviewDate && reviewDate.trim() !== '') {
-            const startOfDay = new Date(reviewDate);
-            startOfDay.setHours(0, 0, 0, 0);
-            const endOfDay = new Date(reviewDate);
-            endOfDay.setHours(23, 59, 59, 999);
-            reviewPipeline.push({
-                $match: {
-                    createdAt: { $gte: startOfDay, $lte: endOfDay }
-                }
-            });
+        if (reviewDate && String(reviewDate).trim() !== '') {
+            const startOfDay = new Date(reviewDate); startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(reviewDate); endOfDay.setHours(23, 59, 59, 999);
+            reviewPipeline.push({ $match: { createdAt: { $gte: startOfDay, $lte: endOfDay } } });
         }
-
         const totalReviewsArray = await Review.aggregate([...reviewPipeline, { $count: "total" }]);
         const totalReviewsCount = totalReviewsArray.length > 0 ? totalReviewsArray[0].total : 0;
-
-        reviewPipeline.push({ $sort: { createdAt: -1 } });
-        reviewPipeline.push({ $skip: (Number(reviewPage) - 1) * limit });
-        reviewPipeline.push({ $limit: limit });
-
+        reviewPipeline.push({ $sort: { createdAt: -1 } }); reviewPipeline.push({ $skip: (Number(reviewPage) - 1) * limit }); reviewPipeline.push({ $limit: limit });
         const rawReviews = await Review.aggregate(reviewPipeline);
-        const reviews = rawReviews.map(rv => ({
-            ...rv,
-            product: rv.productInfo 
-        }));
+        const reviews = rawReviews.map(rv => ({ ...rv, product: rv.productInfo }));
+
+        // KHÚC 6 (MỚI): XỬ LÝ LẤY NGƯỜI DÙNG
+        let userQuery = {};
+        if (userSearch) {
+            userQuery.$or = [
+                { firstName: { $regex: userSearch, $options: 'i' } },
+                { lastName: { $regex: userSearch, $options: 'i' } },
+                { email: { $regex: userSearch, $options: 'i' } },
+                { phone: { $regex: userSearch, $options: 'i' } }
+            ];
+        }
+        if (userRole === 'admin') userQuery.isAdmin = true;
+        else if (userRole === 'customer') userQuery.isAdmin = false;
+
+        const totalUsersCount = await User.countDocuments(userQuery);
+        const users = await User.find(userQuery).sort({ createdAt: -1 }).skip((Number(userPage) - 1) * limit).limit(limit).select('-password'); // Không gửi mật khẩu về Frontend
 
         res.status(200).json({
             success: true, 
-            totalRevenue, totalOrders: totalOrdersAll, pendingCount: pendingCountAll, shippedCount: shippedCountAll, totalProducts: productsCountAll, totalReviewsCountAll,
+            totalRevenue, totalOrders: totalOrdersAll, pendingCount: pendingCountAll, shippedCount: shippedCountAll, totalProducts: productsCountAll, totalReviewsCountAll, totalUsersAll,
             daysList, revenuesList, 
             orders, totalOrdersCount,
             products, totalProductsCount,
             categories: categoriesWithCount, totalCategoriesCount,
-            reviews, totalReviewsCount
+            reviews, totalReviewsCount,
+            users, totalUsersCount // Trả về danh sách user
         });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
@@ -170,9 +150,27 @@ exports.updateOrder = async (req, res) => {
         if (isShipped && !order.isShipped) {
             order.isShipped = true;
             order.shippedAt = Date.now();
-        } else if (!isShipped) {
+            
+            // TĂNG SỐ LƯỢNG ĐÃ BÁN KHI GIAO THÀNH CÔNG
+            const items = order.items || order.orderItems || [];
+            for (const item of items) {
+                const productId = item.productId || item.product;
+                if (productId) {
+                    await Product.findByIdAndUpdate(productId, { $inc: { sold: Number(item.quantity) || 1 } });
+                }
+            }
+        } else if (!isShipped && order.isShipped) {
             order.isShipped = false;
             order.shippedAt = undefined;
+            
+            // TRỪ SỐ LƯỢNG ĐÃ BÁN NẾU ADMIN HỦY XÁC NHẬN GIAO
+            const items = order.items || order.orderItems || [];
+            for (const item of items) {
+                const productId = item.productId || item.product;
+                if (productId) {
+                    await Product.findByIdAndUpdate(productId, { $inc: { sold: -(Number(item.quantity) || 1) } });
+                }
+            }
         }
 
         await order.save();
@@ -184,9 +182,21 @@ exports.shipOrder = async (req, res) => {
     try {
         const order = await Order.findById(req.params.id);
         if (!order) return res.status(404).json({ success: false, message: 'Không thấy đơn!' });
-        order.isShipped = true; 
-        order.shippedAt = Date.now();
-        await order.save();
+        
+        if (!order.isShipped) {
+            order.isShipped = true; 
+            order.shippedAt = Date.now();
+            
+            // LOGIC QUAN TRỌNG: Tăng số lượng đã bán cho từng sản phẩm trong đơn
+            const items = order.items || order.orderItems || [];
+            for (const item of items) {
+                const productId = item.productId || item.product;
+                if (productId) {
+                    await Product.findByIdAndUpdate(productId, { $inc: { sold: Number(item.quantity) || 1 } });
+                }
+            }
+            await order.save();
+        }
         res.status(200).json({ success: true, message: `Đã xác nhận đơn hàng #${order._id}` });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
@@ -498,4 +508,87 @@ exports.getAllReviewsAdmin = async (req, res) => {
             currentPage: Number(page)
         });
     } catch (error) { res.status(500).json({ success: false, message: "Lỗi Server: " + error.message }); }
+};
+
+// =========================================================================
+// 12. TÍNH NĂNG MỚI: QUẢN LÝ TÀI KHOẢN NGƯỜI DÙNG
+// =========================================================================
+
+exports.deleteUser = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
+        
+        // Bảo vệ: Không cho phép xóa tài khoản có quyền Admin
+        if (user.isAdmin) {
+            return res.status(400).json({ success: false, message: 'Hệ thống từ chối: Không thể xóa tài khoản Quản trị viên!' });
+        }
+        
+        await User.findByIdAndDelete(req.params.id);
+        res.status(200).json({ success: true, message: 'Đã xóa tài khoản người dùng thành công!' });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+exports.updateUserRole = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
+        
+        // Đảo ngược quyền (Từ Khách -> Admin và ngược lại)
+        user.isAdmin = !user.isAdmin; 
+        await user.save();
+        
+        const roleName = user.isAdmin ? 'Quản trị viên (Admin)' : 'Khách hàng';
+        res.status(200).json({ success: true, message: `Thành công! Đã chuyển tài khoản thành: ${roleName}` });
+    } catch (error) { 
+        res.status(500).json({ success: false, message: error.message }); 
+    }
+};
+
+// 13. KHÓA HOẶC MỞ KHÓA TÀI KHOẢN
+exports.toggleUserBlock = async (req, res) => {
+    try {
+        const targetUser = await User.findById(req.params.id);
+        if (!targetUser) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
+        
+        // Bảo vệ: Admin không thể tự khóa mình
+        if (req.user && req.user._id.toString() === targetUser._id.toString()) {
+            return res.status(400).json({ success: false, message: 'Hệ thống bảo vệ: Bạn không thể tự khóa tài khoản của mình!' });
+        }
+        
+        targetUser.isBlocked = !targetUser.isBlocked;
+        await targetUser.save();
+        
+        const status = targetUser.isBlocked ? 'đã bị KHÓA' : 'đã được MỞ KHÓA';
+        res.status(200).json({ success: true, message: `Tài khoản ${targetUser.email} ${status}!` });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+
+// 14. ADMIN CHỈNH SỬA THÔNG TIN TÀI KHOẢN
+exports.updateUserAdmin = async (req, res) => {
+    try {
+        const { firstName, lastName, email, phone } = req.body;
+        const targetUser = await User.findById(req.params.id);
+        
+        if (!targetUser) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
+
+        targetUser.firstName = firstName || targetUser.firstName;
+        targetUser.lastName = lastName || targetUser.lastName;
+        targetUser.email = email || targetUser.email;
+        targetUser.phone = phone || targetUser.phone;
+
+        await targetUser.save();
+        res.status(200).json({ success: true, message: 'Cập nhật thông tin thành công!', user: targetUser });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+};
+
+// 15. LẤY THÔNG TIN 1 USER CHO TRANG EDIT
+exports.getUserById = async (req, res) => {
+    try {
+        const targetUser = await User.findById(req.params.id).select('-password');
+        if (!targetUser) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
+        res.status(200).json({ success: true, user: targetUser });
+    } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
