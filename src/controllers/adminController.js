@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs'); // MỚI THÊM ĐỂ BĂM MẬT KHẨU
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
@@ -99,7 +100,7 @@ exports.getDashboardData = async (req, res) => {
         const rawReviews = await Review.aggregate(reviewPipeline);
         const reviews = rawReviews.map(rv => ({ ...rv, product: rv.productInfo }));
 
-        // KHÚC 6 (MỚI): XỬ LÝ LẤY NGƯỜI DÙNG
+        // KHÚC 6: XỬ LÝ LẤY NGƯỜI DÙNG
         let userQuery = {};
         if (userSearch) {
             userQuery.$or = [
@@ -113,7 +114,7 @@ exports.getDashboardData = async (req, res) => {
         else if (userRole === 'customer') userQuery.isAdmin = false;
 
         const totalUsersCount = await User.countDocuments(userQuery);
-        const users = await User.find(userQuery).sort({ createdAt: -1 }).skip((Number(userPage) - 1) * limit).limit(limit).select('-password'); // Không gửi mật khẩu về Frontend
+        const users = await User.find(userQuery).sort({ createdAt: -1 }).skip((Number(userPage) - 1) * limit).limit(limit).select('-password'); 
 
         res.status(200).json({
             success: true, 
@@ -123,12 +124,11 @@ exports.getDashboardData = async (req, res) => {
             products, totalProductsCount,
             categories: categoriesWithCount, totalCategoriesCount,
             reviews, totalReviewsCount,
-            users, totalUsersCount // Trả về danh sách user
+            users, totalUsersCount 
         });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// ... Các hàm cũ (getOrderById, updateOrder, deleteOrder...) giữ nguyên
 exports.getOrderById = async (req, res) => {
     try {
         const order = await Order.findById(req.params.id);
@@ -187,7 +187,7 @@ exports.shipOrder = async (req, res) => {
             order.isShipped = true; 
             order.shippedAt = Date.now();
             
-            // LOGIC QUAN TRỌNG: Tăng số lượng đã bán cho từng sản phẩm trong đơn
+            // Tăng số lượng đã bán cho từng sản phẩm trong đơn
             const items = order.items || order.orderItems || [];
             for (const item of items) {
                 const productId = item.productId || item.product;
@@ -479,7 +479,6 @@ exports.getAllReviewsAdmin = async (req, res) => {
             });
         }
 
-        // LỌC THEO NGÀY
         if (date && date.trim() !== '') {
             const startOfDay = new Date(date);
             startOfDay.setHours(0, 0, 0, 0);
@@ -519,7 +518,6 @@ exports.deleteUser = async (req, res) => {
         const user = await User.findById(req.params.id);
         if (!user) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
         
-        // Bảo vệ: Không cho phép xóa tài khoản có quyền Admin
         if (user.isAdmin) {
             return res.status(400).json({ success: false, message: 'Hệ thống từ chối: Không thể xóa tài khoản Quản trị viên!' });
         }
@@ -536,7 +534,6 @@ exports.updateUserRole = async (req, res) => {
         const user = await User.findById(req.params.id);
         if (!user) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
         
-        // Đảo ngược quyền (Từ Khách -> Admin và ngược lại)
         user.isAdmin = !user.isAdmin; 
         await user.save();
         
@@ -547,13 +544,11 @@ exports.updateUserRole = async (req, res) => {
     }
 };
 
-// 13. KHÓA HOẶC MỞ KHÓA TÀI KHOẢN
 exports.toggleUserBlock = async (req, res) => {
     try {
         const targetUser = await User.findById(req.params.id);
         if (!targetUser) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
         
-        // Bảo vệ: Admin không thể tự khóa mình
         if (req.user && req.user._id.toString() === targetUser._id.toString()) {
             return res.status(400).json({ success: false, message: 'Hệ thống bảo vệ: Bạn không thể tự khóa tài khoản của mình!' });
         }
@@ -566,25 +561,31 @@ exports.toggleUserBlock = async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 14. ADMIN CHỈNH SỬA THÔNG TIN TÀI KHOẢN
+// 14. ADMIN CHỈNH SỬA THÔNG TIN TÀI KHOẢN VÀ MẬT KHẨU
 exports.updateUserAdmin = async (req, res) => {
     try {
-        const { firstName, lastName, email, phone } = req.body;
+        const { firstName, lastName, email, phone, password } = req.body;
         const targetUser = await User.findById(req.params.id);
         
         if (!targetUser) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
 
+        // Cập nhật thông tin cơ bản
         targetUser.firstName = firstName || targetUser.firstName;
         targetUser.lastName = lastName || targetUser.lastName;
         targetUser.email = email || targetUser.email;
         targetUser.phone = phone || targetUser.phone;
+
+        // NẾU CÓ TRUYỀN MẬT KHẨU LÊN, TIẾN HÀNH BĂM VÀ LƯU
+        if (password && password.trim() !== '') {
+            const salt = await bcrypt.genSalt(10);
+            targetUser.password = await bcrypt.hash(password, salt);
+        }
 
         await targetUser.save();
         res.status(200).json({ success: true, message: 'Cập nhật thông tin thành công!', user: targetUser });
     } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 };
 
-// 15. LẤY THÔNG TIN 1 USER CHO TRANG EDIT
 exports.getUserById = async (req, res) => {
     try {
         const targetUser = await User.findById(req.params.id).select('-password');
