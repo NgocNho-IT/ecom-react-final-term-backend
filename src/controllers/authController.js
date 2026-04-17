@@ -52,6 +52,8 @@ exports.registerUser = async (req, res) => {
                 phone: user.phone,
                 email: user.email,
                 isAdmin: user.isAdmin,
+                isSuperAdmin: user.isSuperAdmin,
+                permissions: user.permissions, // <-- BỔ SUNG TRẢ VỀ QUYỀN
                 token: generateToken(user._id)
             });
         }
@@ -77,6 +79,8 @@ exports.loginUser = async (req, res) => {
                 phone: user.phone,
                 email: user.email,
                 isAdmin: user.isAdmin,
+                isSuperAdmin: user.isSuperAdmin,
+                permissions: user.permissions, // <-- BỔ SUNG TRẢ VỀ QUYỀN
                 token: generateToken(user._id)
             });
         } else {
@@ -126,6 +130,8 @@ exports.updateUserProfile = async (req, res) => {
                 phone: updatedUser.phone,
                 email: updatedUser.email,
                 isAdmin: updatedUser.isAdmin,
+                isSuperAdmin: updatedUser.isSuperAdmin,
+                permissions: updatedUser.permissions, // <-- BỔ SUNG TRẢ VỀ QUYỀN
                 token: generateToken(updatedUser._id) // Cấp lại token cho User sau khi update
             });
         } else {

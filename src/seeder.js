@@ -21,14 +21,19 @@ const seedData = async () => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash('12345', salt);
 
-        await User.create([
-            { firstName: 'Nhớ', lastName: 'Đặng Ngọc', phone: '0123456789', email: 'admin@nnit.com', password: hashedPassword, isAdmin: true },
-            { firstName: 'Thành', lastName: 'Long', phone: '0987654321', email: 'khach1@nnit.com', password: hashedPassword, isAdmin: false },
-            { firstName: 'Thanh', lastName: 'Trúc', phone: '0987654322', email: 'khach2@nnit.com', password: hashedPassword, isAdmin: false },
-            { firstName: 'Hoàng', lastName: 'Nam', phone: '0987654323', email: 'khach3@nnit.com', password: hashedPassword, isAdmin: false },
-            { firstName: 'Minh', lastName: 'Anh', phone: '0987654324', email: 'khach4@nnit.com', password: hashedPassword, isAdmin: false },
-            { firstName: 'Bảo', lastName: 'Ngọc', phone: '0987654325', email: 'khach5@nnit.com', password: hashedPassword, isAdmin: false }
-        ]);
+       await User.create([
+    { 
+        firstName: 'Nhớ', lastName: 'Đặng Ngọc', phone: '0123456789', 
+        email: 'admin@nnit.com', password: hashedPassword, 
+        isAdmin: true, 
+        isSuperAdmin: true
+    },
+    { firstName: 'Thành', lastName: 'Long', phone: '0987654321', email: 'khach1@nnit.com', password: hashedPassword, isAdmin: false },
+    { firstName: 'Thanh', lastName: 'Trúc', phone: '0987654322', email: 'khach2@nnit.com', password: hashedPassword, isAdmin: false },
+    { firstName: 'Hoàng', lastName: 'Nam', phone: '0987654323', email: 'khach3@nnit.com', password: hashedPassword, isAdmin: false },
+    { firstName: 'Minh', lastName: 'Anh', phone: '0987654324', email: 'khach4@nnit.com', password: hashedPassword, isAdmin: false },
+    { firstName: 'Bảo', lastName: 'Ngọc', phone: '0987654325', email: 'khach5@nnit.com', password: hashedPassword, isAdmin: false }
+]);
 
         const iphoneId = "69d93d088aca0f96fd9f47aa";
         const samsungId = "69d93d088aca0f96fd9f47ab";

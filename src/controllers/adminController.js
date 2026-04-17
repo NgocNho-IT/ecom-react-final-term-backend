@@ -510,16 +510,21 @@ exports.getAllReviewsAdmin = async (req, res) => {
 };
 
 // =========================================================================
-// 12. TÍNH NĂNG MỚI: QUẢN LÝ TÀI KHOẢN NGƯỜI DÙNG
+// 12. QUẢN LÝ TÀI KHOẢN NGƯỜI DÙNG (ĐÃ FIX BẢO MẬT PHÂN QUYỀN SUPER ADMIN)
 // =========================================================================
 
 exports.deleteUser = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id);
-        if (!user) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
+        // BẢO MẬT TẬN GỐC: Chỉ Super Admin mới được quyền gọi lệnh XÓA
+        if (!req.user.isSuperAdmin) {
+            return res.status(403).json({ success: false, message: 'Hệ thống từ chối: Chỉ Super Admin mới có quyền xóa tài khoản vĩnh viễn!' });
+        }
+
+        const targetUser = await User.findById(req.params.id);
+        if (!targetUser) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
         
-        if (user.isAdmin) {
-            return res.status(400).json({ success: false, message: 'Hệ thống từ chối: Không thể xóa tài khoản Quản trị viên!' });
+        if (targetUser.isSuperAdmin) {
+            return res.status(403).json({ success: false, message: 'Hệ thống bảo vệ: Không thể xóa Super Admin!' });
         }
         
         await User.findByIdAndDelete(req.params.id);
@@ -531,13 +536,22 @@ exports.deleteUser = async (req, res) => {
 
 exports.updateUserRole = async (req, res) => {
     try {
-        const user = await User.findById(req.params.id);
-        if (!user) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
+        // BẢO MẬT: Chỉ Super Admin mới có quyền phân cấp Admin
+        if (!req.user.isSuperAdmin) {
+            return res.status(403).json({ success: false, message: 'Hệ thống từ chối: Chỉ Super Admin mới có quyền Thăng/Hạ cấp Quản trị viên!' });
+        }
+
+        const targetUser = await User.findById(req.params.id);
+        if (!targetUser) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
         
-        user.isAdmin = !user.isAdmin; 
-        await user.save();
+        if (targetUser.isSuperAdmin) {
+            return res.status(403).json({ success: false, message: 'Không thể thay đổi quyền hạn của Super Admin!' });
+        }
         
-        const roleName = user.isAdmin ? 'Quản trị viên (Admin)' : 'Khách hàng';
+        targetUser.isAdmin = !targetUser.isAdmin; 
+        await targetUser.save();
+        
+        const roleName = targetUser.isAdmin ? 'Quản trị viên (Admin)' : 'Khách hàng';
         res.status(200).json({ success: true, message: `Thành công! Đã chuyển tài khoản thành: ${roleName}` });
     } catch (error) { 
         res.status(500).json({ success: false, message: error.message }); 
@@ -552,6 +566,14 @@ exports.toggleUserBlock = async (req, res) => {
         if (req.user && req.user._id.toString() === targetUser._id.toString()) {
             return res.status(400).json({ success: false, message: 'Hệ thống bảo vệ: Bạn không thể tự khóa tài khoản của mình!' });
         }
+
+        // BẢO MẬT
+        if (targetUser.isSuperAdmin) {
+            return res.status(403).json({ success: false, message: 'Hệ thống bảo vệ: Không thể khóa Super Admin!' });
+        }
+        if (targetUser.isAdmin && !req.user.isSuperAdmin) {
+            return res.status(403).json({ success: false, message: 'Hệ thống từ chối: Chỉ Super Admin mới có quyền khóa tài khoản Admin!' });
+        }
         
         targetUser.isBlocked = !targetUser.isBlocked;
         await targetUser.save();
@@ -562,12 +584,18 @@ exports.toggleUserBlock = async (req, res) => {
 };
 
 // 14. ADMIN CHỈNH SỬA THÔNG TIN TÀI KHOẢN VÀ MẬT KHẨU
+// 14. ADMIN CHỈNH SỬA THÔNG TIN TÀI KHOẢN VÀ MẬT KHẨU
 exports.updateUserAdmin = async (req, res) => {
     try {
-        const { firstName, lastName, email, phone, password } = req.body;
+        const { firstName, lastName, email, phone, password, permissions } = req.body; // <-- Nhận thêm permissions
         const targetUser = await User.findById(req.params.id);
         
         if (!targetUser) return res.status(404).json({ success: false, message: 'Không tìm thấy người dùng!' });
+
+        const isSelf = req.user._id.toString() === targetUser._id.toString();
+        if (!isSelf && targetUser.isAdmin && !req.user.isSuperAdmin) {
+            return res.status(403).json({ success: false, message: 'Hệ thống từ chối: Chỉ Super Admin mới có quyền sửa thông tin của Admin khác!' });
+        }
 
         // Cập nhật thông tin cơ bản
         targetUser.firstName = firstName || targetUser.firstName;
@@ -575,7 +603,11 @@ exports.updateUserAdmin = async (req, res) => {
         targetUser.email = email || targetUser.email;
         targetUser.phone = phone || targetUser.phone;
 
-        // NẾU CÓ TRUYỀN MẬT KHẨU LÊN, TIẾN HÀNH BĂM VÀ LƯU
+        // CHỈ SUPER ADMIN MỚI ĐƯỢC LƯU MẢNG QUYỀN
+        if (req.user.isSuperAdmin && permissions) {
+            targetUser.permissions = permissions;
+        }
+
         if (password && password.trim() !== '') {
             const salt = await bcrypt.genSalt(10);
             targetUser.password = await bcrypt.hash(password, salt);

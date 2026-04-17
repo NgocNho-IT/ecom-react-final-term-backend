@@ -7,8 +7,10 @@ const userSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true, maxlength: 100 },
     password: { type: String, required: true },
     isAdmin: { type: Boolean, default: false },
-    // MỚI: Trạng thái cấm tài khoản
-    isBlocked: { type: Boolean, default: false } 
+    isSuperAdmin: { type: Boolean, default: false },
+    isBlocked: { type: Boolean, default: false },
+    // MỚI: Mảng lưu trữ các quyền truy cập Module
+    permissions: { type: [String], default: [] } 
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema);

@@ -8,17 +8,12 @@ const protect = async (req, res, next) => {
             token = req.headers.authorization.split(' ')[1];
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
             req.user = await User.findById(decoded.id).select('-password');
-
             next();
         } catch (error) {
-            console.error(error);
             return res.status(401).json({ success: false, message: 'Không có quyền truy cập, Token không hợp lệ!' });
         }
     }
-
-    if (!token) {
-        return res.status(401).json({ success: false, message: 'Không có quyền truy cập, không tìm thấy Token!' });
-    }
+    if (!token) return res.status(401).json({ success: false, message: 'Không có quyền truy cập, không tìm thấy Token!' });
 };
 
 const admin = (req, res, next) => {
@@ -29,4 +24,17 @@ const admin = (req, res, next) => {
     }
 };
 
-module.exports = { protect, admin };
+// MỚI: Middleware kiểm tra quyền truy cập từng Module
+const checkPermission = (requiredModule) => {
+    return (req, res, next) => {
+        // Super Admin có toàn quyền
+        if (req.user && req.user.isSuperAdmin) return next();
+        // Admin thường phải có mã module trong mảng permissions
+        if (req.user && req.user.isAdmin && req.user.permissions && req.user.permissions.includes(requiredModule)) {
+            return next();
+        }
+        res.status(403).json({ success: false, message: `Từ chối! Bạn không có quyền quản lý module: ${requiredModule}` });
+    };
+};
+
+module.exports = { protect, admin, checkPermission };
